@@ -32,6 +32,47 @@ func (r *OrderRepository) Create(ctx context.Context, order *model.Order) (strin
 	return fmt.Sprintf("%d", id), nil
 }
 
+// 複数の注文を一括で作成し、生成された注文IDのリストを返す
+func (r *OrderRepository) CreateBatch(ctx context.Context, orders []model.Order) ([]string, error) {
+	if len(orders) == 0 {
+		return []string{}, nil
+	}
+
+	// Build bulk insert query
+	placeholders := make([]string, len(orders))
+	args := make([]interface{}, 0, len(orders)*2)
+
+	for i, order := range orders {
+		placeholders[i] = "(?, ?, 'shipping', NOW())"
+		args = append(args, order.UserID, order.ProductID)
+	}
+
+	query := fmt.Sprintf(
+		"INSERT INTO orders (user_id, product_id, shipped_status, created_at) VALUES %s",
+		strings.Join(placeholders, ", "),
+	)
+
+	// Execute the bulk insert
+	result, err := r.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create batch orders: %w", err)
+	}
+
+	// Get the first inserted ID
+	lastInsertID, err := result.LastInsertId()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get last insert ID: %w", err)
+	}
+
+	// Generate order IDs (assuming sequential auto-increment)
+	orderIDs := make([]string, len(orders))
+	for i := range orders {
+		orderIDs[i] = fmt.Sprintf("%d", lastInsertID+int64(i))
+	}
+
+	return orderIDs, nil
+}
+
 // 複数の注文IDのステータスを一括で更新
 // 主に配送ロボットが注文を引き受けた際に一括更新をするために使用
 func (r *OrderRepository) UpdateStatuses(ctx context.Context, orderIDs []int64, newStatus string) error {
