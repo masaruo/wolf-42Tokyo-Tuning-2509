@@ -26,3 +26,9 @@ CREATE INDEX idx_orders_user_arrived ON orders(user_id, arrived_at, order_id);
 
 -- Index for product name searches
 CREATE INDEX idx_products_name_search ON products(name);
+
+-- webapp/mysql/migration/1_create_indexes.sql
+CREATE INDEX idx_users_user_name ON users(user_name);
+CREATE INDEX idx_orders_shipped_status ON orders(shipped_status);
+CREATE INDEX idx_orders_user_id_created_at ON orders(user_id, created_at);
+ALTER TABLE products ADD FULLTEXT INDEX idx_products_name_description (name, description) WITH PARSER ngram;
