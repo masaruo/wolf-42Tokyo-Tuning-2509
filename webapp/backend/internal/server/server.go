@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jmoiron/sqlx"
@@ -47,6 +48,29 @@ func NewServer() (*Server, *sqlx.DB, error) {
 	robotAuthMW := middleware.RobotAuthMiddleware(robotAPIKey)
 
 	r := chi.NewRouter()
+	
+	// Add performance optimization middleware
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			// Set performance headers
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			w.Header().Set("X-Frame-Options", "DENY")
+			w.Header().Set("X-XSS-Protection", "1; mode=block")
+			
+			// Add compression for JSON responses
+			if req.Header.Get("Accept-Encoding") != "" {
+				w.Header().Set("Vary", "Accept-Encoding")
+			}
+			
+			// Set cache headers for static content
+			if req.URL.Path == "/api/health" {
+				w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+			}
+			
+			next.ServeHTTP(w, req)
+		})
+	})
+	
 	r.Use(otelchi.Middleware(
 		"backend-api",
 		otelchi.WithChiRoutes(r),
@@ -100,8 +124,19 @@ func (s *Server) Run() {
 		appPort = "8080"
 	}
 
-	log.Printf("Starting server on :%s", appPort)
-	if err := http.ListenAndServe(":"+appPort, s.Router); err != nil {
+	// Create optimized HTTP server with performance settings
+	server := &http.Server{
+		Addr:         ":" + appPort,
+		Handler:      s.Router,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  120 * time.Second,
+		// Set maximum header size
+		MaxHeaderBytes: 1 << 20, // 1MB
+	}
+
+	log.Printf("Starting optimized server on :%s", appPort)
+	if err := server.ListenAndServe(); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
 }

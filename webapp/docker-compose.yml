@@ -6,18 +6,21 @@ services:
     container_name: tuning-backend
     build:
       context: ./backend
-      dockerfile: Dockerfile
-      target: production
+      dockerfile: Dockerfile.optimized
     environment:
       TZ: Asia/Tokyo
       DATABASE_URL: user:password@tcp(db:3306)/42Tokyo2508-db
-      TRACE_ENABLED: "true" # いらない時はfalse
-      JAEGER_ENDPOINT: "http://jaeger:14268/api/traces"
-      TRACE_SAMPLE_RATIO: "1.0"
+      TRACE_ENABLED: "false" # Disabled for production performance
+      # JAEGER_ENDPOINT: "http://jaeger:14268/api/traces"
+      # TRACE_SAMPLE_RATIO: "1.0"
       # OTEL_TRACES_SAMPLER: "always_off"
+      # Performance optimizations
+      GOMAXPROCS: "4"
+      GOGC: "100"
+      GOMEMLIMIT: "2GiB"
     ports:
       - "8080:8080"
-    working_dir: /usr/src/backend
+    working_dir: /app
     volumes:
       - ./images:/app/images:ro
     networks:
@@ -29,16 +32,25 @@ services:
       test:
         [
           "CMD",
-          "curl",
-          "-I",
-          "http://localhost:8080/api/health",
-          "-X",
-          "GET",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://localhost:8080/api/health"
         ]
-      interval: 5s
-      timeout: 30s
-      retries: 10
+      interval: 10s
+      timeout: 5s
+      retries: 3
       start_period: 30s
+    # Resource limits for production
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
 
   # ----------------------------------------------------
   # Frontend サービス: クライアントサイドの Web アプリケーション
@@ -79,6 +91,14 @@ services:
       MYSQL_DATABASE: 42Tokyo2508-db
       MYSQL_USER: user
       MYSQL_PASSWORD: password
+      # Production performance optimizations
+      MYSQL_INNODB_BUFFER_POOL_SIZE: "4G"
+      MYSQL_INNODB_LOG_FILE_SIZE: "512M"
+      MYSQL_INNODB_FLUSH_LOG_AT_TRX_COMMIT: "1"
+      MYSQL_INNODB_IO_CAPACITY: "2000"
+      MYSQL_INNODB_IO_CAPACITY_MAX: "4000"
+      MYSQL_MAX_CONNECTIONS: "200"
+      MYSQL_QUERY_CACHE_TYPE: "0"
     ports:
       - "3306:3306"
     volumes:
@@ -102,10 +122,19 @@ services:
           "root",
           "-p$$MYSQL_ROOT_PASSWORD",
         ]
-      interval: 5s
-      timeout: 30s
-      retries: 10
-      start_period: 1000s
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 1200s
+    # Resource limits for production
+    deploy:
+      resources:
+        limits:
+          memory: 6G
+          cpus: '3.0'
+        reservations:
+          memory: 2G
+          cpus: '1.0'
   # ----------------------------------------------------
   # Nginx サービス: リバースプロキシと静的ファイル配信
   # ----------------------------------------------------
@@ -126,6 +155,15 @@ services:
         condition: service_healthy
       backend:
         condition: service_healthy
+    # Resource limits for production
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.5'
+        reservations:
+          memory: 256M
+          cpus: '0.5'
 
   jaeger:
     container_name: jaeger

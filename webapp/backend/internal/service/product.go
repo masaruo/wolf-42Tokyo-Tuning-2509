@@ -30,26 +30,24 @@ func (s *ProductService) CreateOrders(ctx context.Context, userID int, items []m
 			return nil
 		}
 
-		for pID, quantity := range itemsToProcess {
-			for i := 0; i < quantity; i++ {
-				order := &model.Order{
-					UserID:    userID,
-					ProductID: pID,
-				}
-				orderID, err := txStore.OrderRepo.Create(ctx, order)
-				if err != nil {
-					return err
-				}
-				insertedOrderIDs = append(insertedOrderIDs, orderID)
-			}
+		// Use batch insert for better performance
+		orderIDs, err := txStore.OrderRepo.CreateBatch(ctx, userID, itemsToProcess)
+		if err != nil {
+			return err
 		}
+		insertedOrderIDs = orderIDs
 		return nil
 	})
 
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("Created %d orders for user %d", len(insertedOrderIDs), userID)
+	
+	// Keep logs only for large orders (for Robot API diagnostics)
+	if len(insertedOrderIDs) > 5 {
+		log.Printf("Created %d orders for user %d", len(insertedOrderIDs), userID)
+	}
+	
 	return insertedOrderIDs, nil
 }
 

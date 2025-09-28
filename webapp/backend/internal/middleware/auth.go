@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"os"
 
 	"backend/internal/repository"
 )
@@ -15,9 +16,18 @@ const userContextKey contextKey = "user"
 func UserAuthMiddleware(sessionRepo *repository.SessionRepository) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Skip auth for health check endpoint
+			if r.URL.Path == "/api/health" {
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			cookie, err := r.Cookie("session_id")
 			if err != nil {
-				log.Printf("Error retrieving session cookie: %v", err)
+				// Reduce logging for performance - only log in debug mode
+				if os.Getenv("DEBUG") == "true" {
+					log.Printf("Error retrieving session cookie: %v", err)
+				}
 				http.Error(w, "Unauthorized: No session cookie", http.StatusUnauthorized)
 				return
 			}
@@ -25,7 +35,10 @@ func UserAuthMiddleware(sessionRepo *repository.SessionRepository) func(http.Han
 
 			userID, err := sessionRepo.FindUserBySessionID(r.Context(), sessionID)
 			if err != nil {
-				log.Printf("Error finding user by session ID: %v", err)
+				// Reduce logging for performance - only log in debug mode
+				if os.Getenv("DEBUG") == "true" {
+					log.Printf("Error finding user by session ID: %v", err)
+				}
 				http.Error(w, "Unauthorized: Invalid session", http.StatusUnauthorized)
 				return
 			}

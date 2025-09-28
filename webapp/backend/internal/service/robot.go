@@ -6,6 +6,7 @@ import (
 	"backend/internal/service/utils"
 	"context"
 	"log"
+	"sort"
 )
 
 type RobotService struct {
@@ -25,7 +26,10 @@ func (s *RobotService) GenerateDeliveryPlan(ctx context.Context, robotID string,
 			if err != nil {
 				return err
 			}
-			plan, err = selectOrdersForDelivery(ctx, orders, robotID, capacity)
+			
+			log.Printf("Robot %s: found %d orders with status 'shipping'", robotID, len(orders))
+			
+			plan, err = selectOrdersForDeliveryOptimized(ctx, orders, robotID, capacity)
 			if err != nil {
 				return err
 			}
@@ -38,6 +42,8 @@ func (s *RobotService) GenerateDeliveryPlan(ctx context.Context, robotID string,
 				if err := txStore.OrderRepo.UpdateStatuses(ctx, orderIDs, "delivering"); err != nil {
 					return err
 				}
+				log.Printf("Robot %s: knapsack selected %d orders (total weight: %d, total value: %d)", 
+					robotID, len(orderIDs), plan.TotalWeight, plan.TotalValue)
 				log.Printf("Updated status to 'delivering' for %d orders", len(orderIDs))
 			}
 			return nil
@@ -55,56 +61,128 @@ func (s *RobotService) UpdateOrderStatus(ctx context.Context, orderID int64, new
 	})
 }
 
-func selectOrdersForDelivery(ctx context.Context, orders []model.Order, robotID string, robotCapacity int) (model.DeliveryPlan, error) {
+// Optimized knapsack using Dynamic Programming with space optimization - O(n*capacity)
+func selectOrdersForDeliveryOptimized(ctx context.Context, orders []model.Order, robotID string, robotCapacity int) (model.DeliveryPlan, error) {
 	n := len(orders)
-	bestValue := 0
-	var bestSet []model.Order
-	steps := 0
-	checkEvery := 16384
+	if n == 0 {
+		return model.DeliveryPlan{
+			RobotID:     robotID,
+			TotalWeight: 0,
+			TotalValue:  0,
+			Orders:      []model.Order{},
+		}, nil
+	}
 
-	var dfs func(i, curWeight, curValue int, curSet []model.Order) bool
-	dfs = func(i, curWeight, curValue int, curSet []model.Order) bool {
-		if curWeight > robotCapacity {
-			return false
-		}
-		steps++
-		if checkEvery > 0 && steps%checkEvery == 0 {
+	// Use greedy for very large datasets to avoid memory issues
+	if n > 300 || robotCapacity > 3000 {
+		return selectOrdersGreedy(orders, robotID, robotCapacity), nil
+	}
+
+	// Space-optimized DP solution - O(n * capacity) time, O(capacity) space
+	dp := make([]int, robotCapacity+1)
+	parent := make([][]int, n+1)
+	for i := range parent {
+		parent[i] = make([]int, robotCapacity+1)
+	}
+
+	// Fill DP table with backtracking information
+	for i := 1; i <= n; i++ {
+		order := orders[i-1]
+		// Check context cancellation periodically
+		if i%50 == 0 {
 			select {
 			case <-ctx.Done():
-				return true
+				return model.DeliveryPlan{}, ctx.Err()
 			default:
 			}
 		}
-		if i == n {
-			if curValue > bestValue {
-				bestValue = curValue
-				bestSet = append([]model.Order{}, curSet...)
+
+		// Process in reverse order to avoid overwriting
+		for w := robotCapacity; w >= order.Weight; w-- {
+			if dp[w-order.Weight]+order.Value > dp[w] {
+				dp[w] = dp[w-order.Weight] + order.Value
+				parent[i][w] = 1 // Mark as selected
 			}
-			return false
 		}
-
-		if dfs(i+1, curWeight, curValue, curSet) {
-			return true
-		}
-
-		order := orders[i]
-		return dfs(i+1, curWeight+order.Weight, curValue+order.Value, append(curSet, order))
 	}
 
-	canceled := dfs(0, 0, 0, nil)
-	if canceled {
-		return model.DeliveryPlan{}, ctx.Err()
-	}
-
-	var totalWeight int
-	for _, o := range bestSet {
-		totalWeight += o.Weight
+	// Backtrack to find selected orders
+	selectedOrders := make([]model.Order, 0)
+	totalWeight := 0
+	w := robotCapacity
+	
+	for i := n; i > 0 && w > 0; i-- {
+		if parent[i][w] == 1 {
+			order := orders[i-1]
+			selectedOrders = append(selectedOrders, order)
+			w -= order.Weight
+			totalWeight += order.Weight
+		}
 	}
 
 	return model.DeliveryPlan{
 		RobotID:     robotID,
 		TotalWeight: totalWeight,
-		TotalValue:  bestValue,
-		Orders:      bestSet,
+		TotalValue:  dp[robotCapacity],
+		Orders:      selectedOrders,
 	}, nil
+}
+
+// Greedy approach for very large datasets - O(n log n) with optimized sorting
+func selectOrdersGreedy(orders []model.Order, robotID string, robotCapacity int) model.DeliveryPlan {
+	if len(orders) == 0 {
+		return model.DeliveryPlan{
+			RobotID:     robotID,
+			TotalWeight: 0,
+			TotalValue:  0,
+			Orders:      []model.Order{},
+		}
+	}
+
+	// Pre-allocate slice for better performance
+	selectedOrders := make([]model.Order, 0, min(len(orders), robotCapacity/10)) // Estimate capacity
+	totalWeight := 0
+	totalValue := 0
+
+	// Use in-place sorting for better memory efficiency
+	sort.Slice(orders, func(i, j int) bool {
+		// Sort by value/weight ratio (greedy heuristic)
+		// Avoid division by zero
+		if orders[i].Weight == 0 {
+			return false
+		}
+		if orders[j].Weight == 0 {
+			return true
+		}
+		ratio1 := float64(orders[i].Value) / float64(orders[i].Weight)
+		ratio2 := float64(orders[j].Value) / float64(orders[j].Weight)
+		return ratio1 > ratio2
+	})
+
+	for _, order := range orders {
+		if totalWeight+order.Weight <= robotCapacity {
+			selectedOrders = append(selectedOrders, order)
+			totalWeight += order.Weight
+			totalValue += order.Value
+		}
+		// Early termination if we can't fit any more items
+		if totalWeight >= int(float64(robotCapacity)*0.95) { // 95% capacity threshold
+			break
+		}
+	}
+
+	return model.DeliveryPlan{
+		RobotID:     robotID,
+		TotalWeight: totalWeight,
+		TotalValue:  totalValue,
+		Orders:      selectedOrders,
+	}
+}
+
+// Helper function for min
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

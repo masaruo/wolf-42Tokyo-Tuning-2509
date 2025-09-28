@@ -8,11 +8,15 @@ services:
       context: ./backend
       dockerfile: Dockerfile.dev
     environment:
-      TRACE_ENABLED: "true"
-      JAEGER_ENDPOINT: "http://jaeger:14268/api/traces"
-      TRACE_SAMPLE_RATIO: "1.0"
+      TRACE_ENABLED: "false"
+     # JAEGER_ENDPOINT: "http://jaeger:14268/api/traces"
+     # TRACE_SAMPLE_RATIO: "1.0"
       DATABASE_URL: user:password@tcp(db:3306)/42Tokyo2508-db
       PORT: 8080
+      # Performance optimizations
+      GOMAXPROCS: "4"
+      GOGC: "100"
+      GOMEMLIMIT: "2GiB"
     working_dir: /usr/src/backend
     volumes:
       # 画像ファイル用のボリュームを追加
@@ -30,6 +34,15 @@ services:
       timeout: 10s
       retries: 10
       start_period: 600s
+    # Resource limits for performance
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
 
   # ----------------------------------------------------
   # Frontend サービス: クライアントサイドの Web アプリケーション
@@ -72,6 +85,10 @@ services:
       MYSQL_DATABASE: 42Tokyo2508-db
       MYSQL_USER: user
       MYSQL_PASSWORD: password
+      # Performance optimizations (handled in my.cnf)
+      # MYSQL_INNODB_BUFFER_POOL_SIZE: "2G"
+      # MYSQL_INNODB_LOG_FILE_SIZE: "256M"
+      # MYSQL_INNODB_FLUSH_LOG_AT_TRX_COMMIT: "1"
     ports:
       - "13306:3306"
     volumes:
@@ -98,6 +115,15 @@ services:
       timeout: 30s
       retries: 10
       start_period: 1500s
+    # Resource limits for performance
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: '2.0'
+        reservations:
+          memory: 1G
+          cpus: '1.0'
   # ----------------------------------------------------
   # Nginx サービス: リバースプロキシと静的ファイル配信
   # ----------------------------------------------------
@@ -118,6 +144,15 @@ services:
         condition: service_healthy
         required: true
     command: ["nginx", "-g", "daemon off;"]
+    # Resource limits for performance
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+        reservations:
+          memory: 128M
+          cpus: '0.25'
 
   jaeger:
     container_name: jaeger
